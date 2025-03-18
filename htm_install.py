@@ -107,7 +107,8 @@ def main():
             "--config", 
             "Release", 
             "--target", 
-            "install"]
+            "install",
+            "--parallel", "1"]  # Use only 1 processor to avoid memory issues
         print("CMake command:", cmake_command)
         subprocess.run(cmake_command, check=True)
         print("C++ component build completed")
@@ -116,7 +117,7 @@ def main():
     else:
         print("C++ components already built. Skipping C++ build...")
 
- wheel_file = find_wheel_file(project_version)
+    wheel_file = find_wheel_file(project_version)
     if wheel_file == None:
         # Create a straightforward approach that directly excludes virtual environments
         print("Preparing for build...")
