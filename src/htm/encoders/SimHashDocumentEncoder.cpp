@@ -26,6 +26,7 @@
 #include <cctype>     // tolower
 #include <climits>    // CHAR_BIT
 #include <regex>
+#include <cstdint>   // uint16_t, uint32_t, uint64_t
 
 #include <hasher.hpp> // digestpp: sha3+shake256 hash digests
 #include <algorithm/sha3.hpp>
