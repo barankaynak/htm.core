@@ -24,6 +24,7 @@ import shutil
 import sys
 import contextlib
 import re
+import tempfile
 
 def main():
     # Check Python version
@@ -53,6 +54,7 @@ def main():
               'wheel', 
               'pybind11', 
               'packaging',
+              'scikit-build-core>=0.10.7',
               'pytest', 
               'requests'], check=True)     
               
@@ -114,15 +116,110 @@ def main():
     else:
         print("C++ components already built. Skipping C++ build...")
 
-    wheel_file = find_wheel_file(project_version)
+ wheel_file = find_wheel_file(project_version)
     if wheel_file == None:
-        # Build the Python package with scikit-build-core
-        print("Building Python package...")
-    
-        cmake_command = [sys.executable, "-m", "build"]
-        print("CMake command:", cmake_command)
-        subprocess.run(cmake_command, check=True)
-        print("")
+        # Create a straightforward approach that directly excludes virtual environments
+        print("Preparing for build...")
+        
+        # Create a direct approach using a patched version of pyproject.toml
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            print(f"Using temporary directory: {tmp_dir}")
+            
+            # Create a patched version of pyproject.toml for the build
+            patched_pyproject = os.path.join(tmp_dir, "pyproject.toml")
+            with open("pyproject.toml", "r") as src_file:
+                content = src_file.read()
+                
+            # Check if tool.scikit-build.sdist.exclude already exists
+            has_sdist_exclude = "tool.scikit-build.sdist.exclude" in content
+            has_wheel_exclude = "tool.scikit-build.wheel.exclude" in content
+            
+            with open(patched_pyproject, "w") as dst_file:
+                dst_file.write(content)
+                
+                # If needed, add explicit exclusions at the end
+                if not has_sdist_exclude and not has_wheel_exclude:
+                    dst_file.write("\n\n[tool.scikit-build.sdist]\n")
+                    dst_file.write("exclude = [\".venv/**\", \"venv/**\", \"*venv/**\", \"**/*venv/**\", \"**/.git/**\", \"**/__pycache__/**\"]\n")
+                    dst_file.write("\n[tool.scikit-build.wheel]\n")
+                    dst_file.write("exclude = [\".venv/**\", \"venv/**\", \"*venv/**\", \"**/*venv/**\", \"**/.git/**\", \"**/__pycache__/**\"]\n")
+            
+            # Create a setup.py file to fall back to if needed
+            setup_py = os.path.join(tmp_dir, "setup.py")
+            with open(setup_py, "w") as f:
+                f.write("from setuptools import setup\n")
+                f.write("setup(\n")
+                f.write("    name=\"htm\",\n")
+                f.write(f"    version=\"{project_version}\",\n")
+                f.write("    packages=[\"htm\"],\n")
+                f.write(")\n")
+            
+            # Use an environment variable to point to the modified pyproject.toml
+            env = os.environ.copy()
+            env["PYTHONPATH"] = os.path.abspath(".")
+            env["TMPDIR"] = tmp_dir
+            env["TEMP"] = tmp_dir
+            env["TMP"] = tmp_dir
+            
+            # Try approach 1: Use build with isolation (preferred)
+            try:
+                print("Building Python package (approach 1: with isolation)...")
+                build_cmd = [
+                    sys.executable, 
+                    "-m", 
+                    "build",
+                    "--outdir", os.path.abspath("dist")
+                ]
+                print(f"Build command: {build_cmd}")
+                subprocess.run(build_cmd, env=env, check=True)
+                print("Build completed successfully")
+            except subprocess.CalledProcessError:
+                # If that fails, try a more direct approach with pip
+                print("First approach failed, trying fallback approach...")
+                
+                # Run pip directly with modifications
+                print("Building Python package (fallback approach)...")
+                
+                # Create a custom setup.cfg with bdist_wheel options
+                setup_cfg = os.path.join(tmp_dir, "setup.cfg")
+                with open(setup_cfg, "w") as f:
+                    f.write("[bdist_wheel]\n")
+                    f.write("universal = 0\n")
+                    f.write("\n[build_ext]\n")
+                    f.write("inplace = 1\n")
+                
+                # Copy necessary build files to temp dir
+                shutil.copy("pyproject.toml", os.path.join(tmp_dir, "pyproject.toml"))
+                if os.path.exists("MANIFEST.in"):
+                    shutil.copy("MANIFEST.in", os.path.join(tmp_dir, "MANIFEST.in"))
+                else:
+                    # Create a MANIFEST.in file
+                    with open(os.path.join(tmp_dir, "MANIFEST.in"), "w") as f:
+                        f.write("global-exclude .venv/**\n")
+                        f.write("global-exclude venv/**\n")
+                        f.write("global-exclude *venv/**\n")
+                
+                # Temporarily modify sys.path to prioritize the current directory
+                old_path = sys.path.copy()
+                sys.path.insert(0, os.path.abspath("."))
+                
+                try:
+                    # Use pip wheel command directly
+                    pip_cmd = [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "wheel",
+                        "--no-deps",
+                        "--wheel-dir", os.path.abspath("dist"),
+                        "."
+                    ]
+                    print(f"Pip command: {pip_cmd}")
+                    subprocess.run(pip_cmd, env=env, check=True)
+                    print("Wheel build completed successfully")
+                finally:
+                    # Restore original sys.path
+                    sys.path = old_path
     else:
         print("Wheel already exists, skipping build of extensions...")
     
